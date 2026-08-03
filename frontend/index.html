@@ -42,7 +42,8 @@
             input.value = "";
 
             try {
-                const response = await fetch("/query", {
+                // IMPORTANT: Replace 'YOUR_EC2_PUBLIC_IP' with the actual IPv4 address of your AWS EC2 instance!
+                const response = await fetch("http://54.163.73.162:8000/query", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ query: query, thread_id: threadId })
