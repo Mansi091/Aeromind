@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AeroMind Support</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #121212; color: #fff; margin: 0; display: flex; flex-direction: column; height: 100vh; }
+        .header { background: #1e1e1e; padding: 20px; text-align: center; border-bottom: 1px solid #333; }
+        .chat-container { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 15px; }
+        .message { max-width: 70%; padding: 15px; border-radius: 8px; line-height: 1.5; }
+        .user-message { background: #2b5278; align-self: flex-end; }
+        .ai-message { background: #1e1e1e; align-self: flex-start; border: 1px solid #333; }
+        .sources { font-size: 0.8em; color: #aaa; margin-top: 10px; border-top: 1px solid #444; padding-top: 5px; }
+        .input-area { padding: 20px; background: #1e1e1e; border-top: 1px solid #333; display: flex; gap: 10px; }
+        input { flex: 1; padding: 15px; border: 1px solid #444; border-radius: 4px; background: #2a2a2a; color: #fff; outline: none; }
+        button { padding: 15px 30px; background: #007bff; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; }
+        button:hover { background: #0056b3; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h2>AeroMind Support Assistant</h2>
+    </div>
+    <div class="chat-container" id="chat">
+        <div class="message ai-message">Hello! I am AeroMind. How can I help you with your aviation documents today?</div>
+    </div>
+    <div class="input-area">
+        <input type="text" id="userInput" placeholder="Ask a question..." onkeypress="if(event.key === 'Enter') sendMessage()">
+        <button onclick="sendMessage()">Send</button>
+    </div>
+
+    <script>
+        const threadId = "thread_" + Math.random().toString(36).substring(7);
+
+        async function sendMessage() {
+            const input = document.getElementById("userInput");
+            const query = input.value.trim();
+            if (!query) return;
+
+            addMessage(query, "user-message");
+            input.value = "";
+
+            try {
+                const response = await fetch("/query", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ query: query, thread_id: threadId })
+                });
+                
+                const data = await response.json();
+                addMessage(data.response, "ai-message", data.sources);
+            } catch (err) {
+                addMessage("Error connecting to server.", "ai-message");
+            }
+        }
+
+        function addMessage(text, className, sources = []) {
+            const chat = document.getElementById("chat");
+            const div = document.createElement("div");
+            div.className = "message " + className;
+            
+            let html = text.replace(/\n/g, "<br>");
+            if (sources.length > 0) {
+                html += `<div class="sources">Sources: ${sources.join(", ")}</div>`;
+            }
+            
+            div.innerHTML = html;
+            chat.appendChild(div);
+            chat.scrollTop = chat.scrollHeight;
+        }
+    </script>
+</body>
+</html>
