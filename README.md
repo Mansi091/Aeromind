@@ -21,7 +21,10 @@ AeroMind is built with a modern, cloud-native architecture prioritizing performa
 
 1. **Cloud Ingestion:** A background pipeline securely authenticates with AWS via `boto3`, pulls aviation manuals (PDFs) from an S3 bucket into a temporary hidden memory buffer, and extracts the text using `PyMuPDF`.
 2. **Vectorization:** The text is chunked and embedded into a ChromaDB vector database using Sentence Transformers.
-3. **Multi-Agent RAG:** When a user asks a question, LangGraph dynamically routes the query to a specialized Retriever Agent, pulls the relevant context from the vector database, and generates a highly accurate response.
+3. **Multi-Agent RAG:** When a user asks a question, LangGraph dynamically routes the query through specialized AI agents:
+   - **🔍 Retriever Agent:** Analyzes the user's query, transforms it for optimal search, and pulls the most relevant context from the vector database.
+   - **📝 Generator Agent:** Synthesizes the retrieved aviation technical data and formulates a highly accurate, professional response.
+   - **⚖️ Evaluator Agent:** (Optional/Future) Cross-checks the generated answer against the original source documents to prevent hallucinations.
 4. **CORS & Proxying:** To ensure seamless communication across domains, the system is designed with a decoupled architecture. The Vercel frontend securely fetches data from the AWS EC2 instance.
 
 ## 🚀 Running Locally
