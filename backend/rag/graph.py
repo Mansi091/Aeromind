@@ -24,7 +24,7 @@ def generate_node(state: AgentState):
     query = state["query"]
     context = state["context"]
     
-    llm = ChatGroq(model_name="llama3-8b-8192", temperature=0)
+    llm = ChatGroq(model_name="openai/gpt-oss-20b", temperature=0)
     
     prompt = PromptTemplate(
         template="""You are AeroMind, a professional aviation AI assistant. 
