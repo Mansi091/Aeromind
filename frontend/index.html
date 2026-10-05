@@ -6,8 +6,17 @@
     <title>AeroMind Support</title>
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #121212; color: #fff; margin: 0; display: flex; flex-direction: column; height: 100vh; }
-        .header { background: #1e1e1e; padding: 20px; text-align: center; border-bottom: 1px solid #333; }
-        .chat-container { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 15px; }
+        .header { background: #1e1e1e; padding: 16px 24px; border-bottom: 1px solid #333; }
+        .header h2 { margin: 0; font-size: 1.2rem; }
+        .workspace { flex: 1; min-height: 0; display: grid; grid-template-columns: 280px minmax(0, 1fr); }
+        .upload-panel { background: #1a1e23; border-right: 1px solid #333; padding: 22px 18px; display: flex; flex-direction: column; align-items: stretch; gap: 12px; }
+        .upload-panel h3 { margin: 0; font-size: 1rem; }
+        .upload-panel label { font-size: 0.85rem; color: #d9dee4; }
+        .upload-panel input[type="file"] { box-sizing: border-box; width: 100%; padding: 8px; border: 1px solid #444; border-radius: 4px; background: #22272d; color: #ddd; font-size: 0.8rem; }
+        .upload-panel button { padding: 12px 14px; }
+        #uploadStatus { min-height: 2.5em; color: #b9c0c8; font-size: 0.85rem; line-height: 1.4; overflow-wrap: anywhere; }
+        .chat-panel { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+        .chat-container { flex: 1; min-height: 0; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 15px; }
         .message { max-width: 70%; padding: 15px; border-radius: 8px; line-height: 1.5; }
         .user-message { background: #2b5278; align-self: flex-end; }
         .ai-message { background: #1e1e1e; align-self: flex-start; border: 1px solid #333; }
@@ -16,22 +25,79 @@
         input { flex: 1; padding: 15px; border: 1px solid #444; border-radius: 4px; background: #2a2a2a; color: #fff; outline: none; }
         button { padding: 15px 30px; background: #007bff; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; }
         button:hover { background: #0056b3; }
+        button:disabled { opacity: 0.6; cursor: wait; }
+        @media (max-width: 700px) {
+            .workspace { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+            .upload-panel { padding: 12px 14px; border-right: 0; border-bottom: 1px solid #333; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 10px; }
+            .upload-panel h3 { display: none; }
+            .upload-panel label, #uploadStatus { grid-column: 1 / -1; }
+            .upload-panel input[type="file"] { min-width: 0; }
+            .upload-panel button { padding: 10px 12px; }
+            .chat-container { padding: 14px; }
+            .input-area { padding: 12px; }
+            .input-area input { min-width: 0; padding: 12px; }
+            .input-area button { padding: 12px 16px; }
+            .message { max-width: 88%; }
+        }
     </style>
 </head>
 <body>
     <div class="header">
         <h2>AeroMind Support Assistant</h2>
     </div>
-    <div class="chat-container" id="chat">
-        <div class="message ai-message">Hello! I am AeroMind. How can I help you with your aviation documents today?</div>
-    </div>
-    <div class="input-area">
-        <input type="text" id="userInput" placeholder="Ask a question..." onkeypress="if(event.key === 'Enter') sendMessage()">
-        <button onclick="sendMessage()">Send</button>
-    </div>
+    <main class="workspace">
+        <aside class="upload-panel" aria-labelledby="documentsHeading">
+            <h3 id="documentsHeading">Documents</h3>
+            <label for="documentFile">PDF manual</label>
+            <input type="file" id="documentFile" accept="application/pdf,.pdf">
+            <button id="uploadButton" onclick="uploadDocument()">Upload and index</button>
+            <div id="uploadStatus" role="status" aria-live="polite"></div>
+        </aside>
+        <section class="chat-panel" aria-label="AeroMind chat">
+            <div class="chat-container" id="chat">
+                <div class="message ai-message">Hello! I am AeroMind. How can I help you with your aviation documents today?</div>
+            </div>
+            <div class="input-area">
+                <input type="text" id="userInput" placeholder="Ask a question..." onkeypress="if(event.key === 'Enter') sendMessage()">
+                <button onclick="sendMessage()">Send</button>
+            </div>
+        </section>
+    </main>
 
     <script>
         const threadId = "thread_" + Math.random().toString(36).substring(7);
+
+        async function uploadDocument() {
+            const fileInput = document.getElementById("documentFile");
+            const uploadButton = document.getElementById("uploadButton");
+            const status = document.getElementById("uploadStatus");
+            const file = fileInput.files[0];
+            if (!file) {
+                status.textContent = "Choose a PDF file first.";
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append("file", file);
+            uploadButton.disabled = true;
+            status.textContent = "Uploading and indexing PDF...";
+
+            try {
+                const response = await fetch("http://127.0.0.1:8000/documents", {
+                    method: "POST",
+                    body: formData
+                });
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.detail || "Upload failed.");
+
+                status.textContent = `Indexed ${data.filename}: ${data.chunks_added} chunks added.`;
+                fileInput.value = "";
+            } catch (error) {
+                status.textContent = error.message || "Could not upload the PDF.";
+            } finally {
+                uploadButton.disabled = false;
+            }
+        }
 
         async function sendMessage() {
             const input = document.getElementById("userInput");
@@ -42,14 +108,17 @@
             input.value = "";
 
             try {
-                // IMPORTANT: Replace 'YOUR_EC2_PUBLIC_IP' with the actual IPv4 address of your AWS EC2 instance!
-                const response = await fetch("http://localhost:8000/query", {
+                const response = await fetch("http://127.0.0.1:8000/query", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ query: query, thread_id: threadId })
                 });
                 
-                const data = await response.json();
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok) {
+                    addMessage(data.detail || `Request failed (${response.status}).`, "ai-message");
+                    return;
+                }
                 addMessage(data.response, "ai-message", data.sources);
             } catch (err) {
                 addMessage("Error connecting to server.", "ai-message");
