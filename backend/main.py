@@ -1,5 +1,6 @@
 from pathlib import Path
 from uuid import uuid4
+import logging
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -52,7 +53,7 @@ async def process_query(req: QueryRequest):
     except Exception as exc:
         raise HTTPException(
             status_code=503,
-            detail="Question processing failed. Check the PostgreSQL connection and backend logs.",
+            detail="Question processing failed. Check the Groq API key and backend logs.",
         ) from exc
     
     return {
@@ -89,6 +90,7 @@ async def upload_document(file: UploadFile = File(...)):
         file_path.unlink(missing_ok=True)
         raise
     except Exception as exc:
+        logging.exception("Failed to process uploaded PDF %s", stored_name)
         file_path.unlink(missing_ok=True)
         raise HTTPException(status_code=500, detail="Could not process and index this PDF.") from exc
 

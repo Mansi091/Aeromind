@@ -3,3 +3,5 @@
 __pycache__/
 .pytest_cache/
 data/documents/
+data/aeromind.sqlite3
+*.log

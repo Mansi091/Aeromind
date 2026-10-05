@@ -1,99 +1,152 @@
-from functools import lru_cache
-import os
-from asyncpg.exceptions import DuplicateObjectError, DuplicateTableError
-from langchain_community.embeddings import SentenceTransformerEmbeddings
-from langchain_postgres.v2.engine import PGEngine
-from langchain_postgres.v2.hybrid_search_config import (
-    HybridSearchConfig,
-    reciprocal_rank_fusion,
-)
-from langchain_postgres.v2.vectorstores import PGVectorStore
-from sqlalchemy.exc import SQLAlchemyError
+"""Local SQLite storage and hybrid retrieval for aviation manual chunks."""
 
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql+asyncpg://aeromind:aeromind@localhost:5432/aeromind",
-)
-TABLE_NAME = os.getenv("PGVECTOR_TABLE", "aviation_chunks")
-VECTOR_SIZE = 384
+from __future__ import annotations
+
+import json
+import math
+import os
+import sqlite3
+from functools import lru_cache
+from pathlib import Path
+from contextlib import closing
+
+from langchain_community.embeddings import SentenceTransformerEmbeddings
+from langchain_core.documents import Document
+
+DATABASE_PATH = Path(
+    os.getenv("SQLITE_DB_PATH", Path(__file__).resolve().parents[2] / "data" / "aeromind.sqlite3")
+).expanduser()
 RESULT_COUNT = 5
 
 
-def _asyncpg_database_url() -> str:
-    if DATABASE_URL.startswith("postgresql+psycopg://"):
-        return DATABASE_URL.replace("postgresql+psycopg://", "postgresql+asyncpg://", 1)
-    if DATABASE_URL.startswith("postgresql://"):
-        return DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
-    return DATABASE_URL
-
-
-def _hybrid_search_config(query: str = "") -> HybridSearchConfig:
-    return HybridSearchConfig(
-        tsv_column="content_tsv",
-        tsv_lang="pg_catalog.english",
-        fts_query=query,
-        fusion_function=reciprocal_rank_fusion,
-        fusion_function_parameters={"fetch_top_k": RESULT_COUNT},
-        primary_top_k=20,
-        secondary_top_k=20,
-    )
-
-
-def _is_duplicate_error(error: Exception, expected_error: type[Exception]) -> bool:
-    return isinstance(error, expected_error) or isinstance(
-        getattr(error, "orig", None), expected_error
-    )
-
-
 @lru_cache(maxsize=1)
-def get_embeddings():
+def get_embeddings() -> SentenceTransformerEmbeddings:
     return SentenceTransformerEmbeddings(model_name="all-MiniLM-L6-v2")
 
-@lru_cache(maxsize=1)
-def get_pg_engine():
-    return PGEngine.from_connection_string(_asyncpg_database_url())
 
-@lru_cache(maxsize=1)
-def get_vector_store():
-    engine = get_pg_engine()
-    hybrid_config = _hybrid_search_config()
-    try:
-        engine.init_vectorstore_table(
-            table_name=TABLE_NAME,
-            vector_size=VECTOR_SIZE,
-            hybrid_search_config=hybrid_config,
+def _connect() -> sqlite3.Connection:
+    DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(DATABASE_PATH)
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA foreign_keys = ON")
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS aviation_chunks (
+            id INTEGER PRIMARY KEY,
+            content TEXT NOT NULL,
+            metadata TEXT NOT NULL,
+            embedding TEXT NOT NULL
         )
-    except (DuplicateTableError, SQLAlchemyError) as error:
-        if not _is_duplicate_error(error, DuplicateTableError):
-            raise
-
-    vector_store = PGVectorStore.create_sync(
-        engine=engine,
-        embedding_service=get_embeddings(),
-        table_name=TABLE_NAME,
-        k=RESULT_COUNT,
-        hybrid_search_config=hybrid_config,
+        """
     )
-    try:
-        vector_store.apply_hybrid_search_index()
-    except (DuplicateObjectError, DuplicateTableError, SQLAlchemyError) as error:
-        if not (
-            _is_duplicate_error(error, DuplicateObjectError)
-            or _is_duplicate_error(error, DuplicateTableError)
-        ):
-            raise
-    return vector_store
-
-def add_to_vector_store(chunks: list[str], metadatas: list[dict] | None = None):
-    vector_store = get_vector_store()
-    vector_store.add_texts(texts=chunks, metadatas=metadatas)
-    print(f"Added {len(chunks)} chunks to PostgreSQL table '{TABLE_NAME}'")
-
-def retrieve_context(query: str, k: int = 5):
-    vector_store = get_vector_store()
-    docs = vector_store.similarity_search(
-        query,
-        k=k,
-        hybrid_search_config=_hybrid_search_config(query),
+    connection.execute(
+        """
+        CREATE VIRTUAL TABLE IF NOT EXISTS aviation_chunks_fts
+        USING fts5(content, content='aviation_chunks', content_rowid='id')
+        """
     )
-    return docs
+    connection.executescript(
+        """
+        CREATE TRIGGER IF NOT EXISTS aviation_chunks_ai AFTER INSERT ON aviation_chunks BEGIN
+            INSERT INTO aviation_chunks_fts(rowid, content) VALUES (new.id, new.content);
+        END;
+        CREATE TRIGGER IF NOT EXISTS aviation_chunks_ad AFTER DELETE ON aviation_chunks BEGIN
+            INSERT INTO aviation_chunks_fts(aviation_chunks_fts, rowid, content)
+            VALUES ('delete', old.id, old.content);
+        END;
+        CREATE TRIGGER IF NOT EXISTS aviation_chunks_au AFTER UPDATE ON aviation_chunks BEGIN
+            INSERT INTO aviation_chunks_fts(aviation_chunks_fts, rowid, content)
+            VALUES ('delete', old.id, old.content);
+            INSERT INTO aviation_chunks_fts(rowid, content) VALUES (new.id, new.content);
+        END;
+        """
+    )
+    return connection
+
+
+def add_to_vector_store(chunks: list[str], metadatas: list[dict] | None = None) -> None:
+    if not chunks:
+        return
+    if metadatas is None:
+        metadatas = [{} for _ in chunks]
+    if len(metadatas) != len(chunks):
+        raise ValueError("There must be one metadata object per chunk.")
+
+    embeddings = get_embeddings().embed_documents(chunks)
+    rows = [
+        (content, json.dumps(metadata), json.dumps(embedding))
+        for content, metadata, embedding in zip(chunks, metadatas, embeddings)
+    ]
+    with closing(_connect()) as connection:
+        with connection:
+            connection.executemany(
+                "INSERT INTO aviation_chunks(content, metadata, embedding) VALUES (?, ?, ?)",
+                rows,
+            )
+    print(f"Added {len(chunks)} chunks to SQLite database '{DATABASE_PATH}'")
+
+
+def _cosine_similarity(left: list[float], right: list[float]) -> float:
+    dot = sum(a * b for a, b in zip(left, right))
+    left_norm = math.sqrt(sum(value * value for value in left))
+    right_norm = math.sqrt(sum(value * value for value in right))
+    if not left_norm or not right_norm:
+        return 0.0
+    return dot / (left_norm * right_norm)
+
+
+def _fts_query(query: str) -> str:
+    # FTS5 treats punctuation and operators specially; quoting each term keeps
+    # ordinary user questions from becoming malformed MATCH expressions.
+    terms = [term.replace('"', '""') for term in query.split() if term.strip()]
+    return " OR ".join(f'"{term}"' for term in terms)
+
+
+def retrieve_context(query: str, k: int = RESULT_COUNT) -> list[Document]:
+    query_vector = get_embeddings().embed_query(query)
+    with closing(_connect()) as connection:
+        rows = connection.execute(
+            "SELECT id, content, metadata, embedding FROM aviation_chunks"
+        ).fetchall()
+        if not rows:
+            return []
+
+        query_text = _fts_query(query)
+        keyword_rows = []
+        if query_text:
+            try:
+                keyword_rows = connection.execute(
+                    """
+                    SELECT rowid AS id, bm25(aviation_chunks_fts) AS score
+                    FROM aviation_chunks_fts
+                    WHERE aviation_chunks_fts MATCH ?
+                    ORDER BY score
+                    LIMIT ?
+                    """,
+                    (query_text, max(k * 4, 20)),
+                ).fetchall()
+            except sqlite3.OperationalError:
+                # Queries containing unsupported token syntax still get vector search.
+                keyword_rows = []
+
+    semantic_ranked = sorted(
+        rows,
+        key=lambda row: _cosine_similarity(query_vector, json.loads(row["embedding"])),
+        reverse=True,
+    )[: max(k * 4, 20)]
+    scores: dict[int, float] = {}
+    rrf_constant = 60
+    for ranking in (semantic_ranked, keyword_rows):
+        for rank, row in enumerate(ranking, start=1):
+            row_id = int(row["id"])
+            scores[row_id] = scores.get(row_id, 0.0) + 1.0 / (rrf_constant + rank)
+
+    by_id = {int(row["id"]): row for row in rows}
+    selected = sorted(scores, key=scores.get, reverse=True)[:k]
+    return [
+        Document(
+            page_content=by_id[row_id]["content"],
+            metadata=json.loads(by_id[row_id]["metadata"]),
+        )
+        for row_id in selected
+    ]

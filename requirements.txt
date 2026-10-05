@@ -10,6 +10,3 @@ langchain-groq
 sentence-transformers
 pytest
 langchain-community
-langchain-postgres
-asyncpg
-psycopg[binary]

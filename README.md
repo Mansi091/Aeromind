@@ -15,14 +15,14 @@ flowchart TD
    Save --> Extract[PyMuPDF extracts text]
    Extract --> Chunk[Split into 1000-character chunks with 200-character overlap]
    Chunk --> Embed[Sentence Transformers creates 384-dimensional embeddings]
-   Chunk --> Store[Store chunk, metadata, vector, and full-text data in PostgreSQL]
+   Chunk --> Store[Store chunk, metadata, and vector in local SQLite]
    Embed --> Store
 
    Question[User question] --> API[FastAPI POST /query]
    API --> Graph[LangGraph workflow]
    Graph --> Retrieve[Retriever node]
-   Retrieve --> Dense[Vector similarity search]
-   Retrieve --> Keyword[PostgreSQL full-text search]
+   Retrieve --> Dense[Cosine similarity search]
+   Retrieve --> Keyword[SQLite FTS5 keyword search]
    Store --> Dense
    Store --> Keyword
    Dense --> Fusion[Reciprocal-rank fusion]
@@ -34,15 +34,15 @@ flowchart TD
    Generate --> Answer[Answer and source filenames]
 ```
 
-PDFs can enter through the browser's upload control or by placing them in `data/documents/` and running the ingestion script. Both routes extract, chunk, embed, and index the document. The original PDF remains on disk; its searchable chunks, embeddings, and metadata are stored in PostgreSQL.
+PDFs can enter through the browser's upload control or by placing them in `data/documents/` and running the ingestion script. Both routes extract, chunk, embed, and index the document. The original PDF remains on disk; its searchable chunks, embeddings, and metadata are stored in the local SQLite database at `data/aeromind.sqlite3` by default.
 
 ## Technologies Used
 
 - **Python 3.12** for the backend and ingestion pipeline.
 - **FastAPI and Uvicorn** for the API, including `POST /documents` and `POST /query`.
 - **LangGraph** for the two-step retrieval and generation workflow.
-- **LangChain and langchain-postgres** for the model prompt and PostgreSQL vector-store integration.
-- **PostgreSQL with pgvector and full-text search** for semantic and keyword retrieval.
+- **LangChain** for model prompts and sentence-transformer embeddings.
+- **SQLite with FTS5** for local document storage and keyword search; cosine similarity over stored embeddings provides semantic retrieval.
 - **Sentence Transformers (`all-MiniLM-L6-v2`)** for 384-dimensional text embeddings.
 - **Groq (`openai/gpt-oss-20b`)** for answer generation.
 - **PyMuPDF** for PDF text extraction.
@@ -68,7 +68,7 @@ Retrieval and context grounding can reduce unsupported answers, but they do not 
 
 ## Run Locally
 
-Prerequisites: Python 3.12+, PostgreSQL with the pgvector extension available, and a Groq API key.
+Prerequisites: Python 3.12+ and a Groq API key. SQLite is included with Python; no database server or connection URL is required.
 
 1. Create and activate a virtual environment, install dependencies, and copy the environment template:
 
@@ -79,7 +79,7 @@ Prerequisites: Python 3.12+, PostgreSQL with the pgvector extension available, a
   Copy-Item .env.example .env
   ```
 
-2. Set `GROQ_API_KEY` and your PostgreSQL `DATABASE_URL` in `.env`. The application converts a `postgresql://` or `postgresql+psycopg://` URL to the async PostgreSQL driver URL when needed.
+2. Set `GROQ_API_KEY` in `.env`. The local database file is created automatically at `data/aeromind.sqlite3`; set `SQLITE_DB_PATH` only if you want a different location.
 3. Start the API in one terminal:
 
   ```powershell
@@ -94,7 +94,7 @@ Prerequisites: Python 3.12+, PostgreSQL with the pgvector extension available, a
 
 5. Upload a PDF in the Documents panel. Alternatively, place PDFs in `data/documents/` and run `python scripts/ingest_docs.py` to index them from the command line.
 
-The API documentation is available at `http://127.0.0.1:8000/docs`. On first use, the PostgreSQL integration creates the `aviation_chunks` table and its full-text index. If upgrading from the previous vector-only store, re-upload or re-index documents; existing rows are not migrated automatically.
+The API documentation is available at `http://127.0.0.1:8000/docs`. On first use, AeroMind creates the SQLite tables and FTS5 index. Documents indexed in an earlier PostgreSQL database are not migrated automatically; upload those PDFs again to index them in SQLite.
 
 ## Testing
 
